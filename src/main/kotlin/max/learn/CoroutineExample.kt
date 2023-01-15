@@ -4,20 +4,23 @@ import kotlinx.coroutines.*
 import kotlin.coroutines.*
 
 class Coroutine(
-    val scope: CoroutineScope,
+//    val scope: CoroutineScope,
     private val block: suspend Accessor.() -> Unit
 ) {
 
     private val accessor = AccessorImpl()
     private var continuation: Continuation<Unit>? = null
     private var job: Job? = null
+    private var prev: Coroutine? = null
 
     suspend fun resume() {
         suspendCancellableCoroutine<Unit> {
+            prev = current.get()
+            current.set(this)
             if (continuation == null) {
                 // first resume
                 continuation = it
-                job = scope.launch {
+                job = CoroutineScope(it.context).launch {
                     block.invoke(accessor)
                     // at this point main logic of the coroutine is finished
                     // and we should resume our caller
@@ -29,8 +32,17 @@ class Coroutine(
         }
     }
 
+    fun isCompleted() : Boolean {
+        return job != null && job?.isCompleted!!
+    }
+
+    fun isStarted() : Boolean {
+        return job != null
+    }
+
     private suspend fun suspend() {
         suspendCancellableCoroutine<Unit> {
+            current.set(prev)
             suspendInternal(it)
         }
     }
@@ -49,24 +61,32 @@ class Coroutine(
 
     private inner class AccessorImpl : Accessor {
         override suspend fun suspend() {
-            return this@Coroutine.suspend()
+            return Coroutine.suspend()
         }
 
         override suspend fun yield() {
-            return this@Coroutine.suspend()
+            return Coroutine.suspend()
+        }
+    }
+
+    companion object {
+
+        private var current: ThreadLocal<Coroutine> = ThreadLocal()
+        suspend fun suspend() {
+            current.get().suspend()
         }
     }
 }
 
 fun main() = runBlocking(newSingleThreadContext("Coroutine")) {
 
-    val co1 = Coroutine(this) {
+    val co1 = Coroutine {
         println("Step 2")
-        yield()
+        Coroutine.suspend()
         println("Step 4")
     }
 
-    val co2 = Coroutine(this) {
+    val co2 = Coroutine {
         println("Step 1")
         co1.resume()
         println("Step 3")
